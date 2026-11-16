@@ -1,0 +1,67 @@
+name: Build APK
+
+on:
+
+  push:
+
+    branches: [ main, master ]
+
+  workflow_dispatch:
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: 解压工程
+
+        run: unzip -o WageCalc-apk.zip -d src
+
+      - uses: actions/setup-java@v4
+
+        with:
+
+          distribution: temurin
+
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装SDK平台
+
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: 安装Gradle
+
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip
+
+          unzip -q gradle-8.7-bin.zip -d $HOME/gd
+
+          echo "$HOME/gd/gradle-8.7/bin" >> $GITHUB_PATH
+
+      - name: 构建APK
+
+        working-directory: src/WageCalc-apk
+
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+
+        with:
+
+          name: wagecalc-apk
+
+          path: src/WageCalc-apk/app/build/outputs/apk/debug/*.apk
+
+          if-no-files-found: error
