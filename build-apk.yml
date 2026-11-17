@@ -1,0 +1,88 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 定位工程目录
+        run: |
+          set -e
+          mkdir -p work
+          BEST=""
+          BEST_SZ=0
+          for Z in *.zip; do
+            [ -e "$Z" ] || continue
+            D="work/$(echo "$Z" | tr -c 'A-Za-z0-9' '_')"
+            mkdir -p "$D"
+            if ! unzip -qo "$Z" -d "$D" 2>/dev/null; then
+              echo "跳过（无法解压）：$Z"
+              continue
+            fi
+            P=$(find "$D" -maxdepth 4 -name settings.gradle -printf '%h\n' 2>/dev/null | head -1)
+            if [ -z "$P" ]; then
+              P=$(find "$D" -maxdepth 4 -name settings.gradle | head -1)
+              [ -n "$P" ] && P=$(dirname "$P")
+            fi
+            if [ -z "$P" ] || [ ! -f "$P/app/build.gradle" ]; then
+              echo "跳过（结构不符，找不到 app/build.gradle）：$Z"
+              continue
+            fi
+            SZ=$(wc -c < "$P/app/src/main/assets/index.html" 2>/dev/null || echo 0)
+            SZ=$(echo "$SZ" | tr -dc '0-9')
+            [ -z "$SZ" ] && SZ=0
+            VER=$(grep -m1 versionName "$P/app/build.gradle" 2>/dev/null || true)
+            echo "可用工程：$Z => $P | 页面 ${SZ} 字节 | $VER"
+            if [ "$SZ" -gt "$BEST_SZ" ]; then
+              BEST="$P"
+              BEST_SZ="$SZ"
+              echo "^^ 目前页面最新，暂定使用"
+            fi
+          done
+          if [ -z "$BEST" ] && [ -f app/build.gradle ]; then
+            BEST="."
+          fi
+          if [ -z "$BEST" ]; then
+            echo "仓库里没有找到可构建的工程，请上传 WageCalc-apk.zip"
+            exit 1
+          fi
+          echo "最终使用工程：$BEST（页面 $BEST_SZ 字节）"
+          echo "PROJECT_DIR=$(cd "$BEST" && pwd)" >> "$GITHUB_ENV"
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 SDK 组件
+        run: |
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
+
+      - name: 安装 Gradle 8.7
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q gradle-8.7-bin.zip -d "$HOME/g"
+          echo "$HOME/g/gradle-8.7/bin" >> "$GITHUB_PATH"
+
+      - name: 构建 APK
+        run: |
+          cd "$PROJECT_DIR"
+          echo "当前目录：$(pwd)"
+          gradle assembleDebug --no-daemon
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wagecalc-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
